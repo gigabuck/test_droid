@@ -1,0 +1,95 @@
+#!/bin/bash
+# Author:       Bucky Spires
+# Email:        gigabuck@gmail.com
+# Date:         2013-08-06
+# Usage:        test_droid [apkfile]
+# Description:
+# Setups testing environment for android testing.
+#
+#
+ 
+# Defaults
+app_name=`echo "$1" | cut -d'.' -f1`
+trap stop_test SIGINT
+android_sdk="/Users/gigabuck/android-sdks"
+
+
+# Delete
+delete_avd() 
+{
+	echo "[-] Deleting AVD..."
+	rm -rf /Users/gigabuck/.android/avd/${app_name}.avd/ &> /dev/null
+	rm -f /Users/gigabuck/.android/avd/${app_name}.ini &> /dev/null
+}
+
+# Create
+create_avd()
+{
+	echo "[-] Creating AVD..."
+	#android create avd -f -t 2 -s "WXGA800" -n ${app_name}
+	${android_sdk}/tools/android create avd -f -t 28 -n ${app_name} -c 256M &> /dev/null
+	sleep 5
+	echo 'hw.keyboard=yes' >> ~/.android/avd/${app_name}.avd/config.ini
+}
+
+# Start
+start_test()
+{
+	echo "[-] Starting Emulator..."
+	${android_sdk}/tools/emulator -avd ${app_name} -no-boot-anim -http-proxy http://127.0.0.1:8080 &> /dev/null & 
+	sleep 120 # go have a smoke, this shit takes awhile to start up
+	echo "[-] Starting Burp..."
+	cd /Applications/Burp
+	./startBurp.sh &> /dev/null &
+	cd - &> /dev/null
+	sleep 30
+	echo "[-] Fetching PortSwiggerCA cert..."
+	curl --silent --proxy http://127.0.0.1:8080 http://burp/cert -o ~/PortSwiggerCA.p12
+	sleep 10
+	echo "[-] Installing PortSwiggerCA cert..."
+	${android_sdk}/platform-tools/adb push ~/PortSwiggerCA.cer /sdcard/PortSwiggerCA.cer &> /dev/null
+	echo "[-] Installing ${app_name}.apk..."
+	${android_sdk}/platform-tools/adb install ${app_name}.apk &> /dev/null
+	echo "[-] Installing Drozer..."
+	${android_sdk}/platform-tools/adb install ~/bin/agent.apk &> /dev/null
+	${android_sdk}/platform-tools/adb forward tcp:31415 tcp:31415
+	osascript -e 'tell application "Terminal" to do script "sudo drozer console connect"' &> /dev/null
+	echo "[-] Starting logcat..."
+	osascript -e 'tell application "Terminal" to do script "'${android_sdk}'/platform-tools/adb logcat"' &> /dev/null
+	echo "[-] Next steps to be done manually..."
+	echo "    * In Emulator, go to Settings -> Security"
+	echo "    * Choose Install From SD Card to install PortSwiggerCA cert"
+	echo "    * In Burp, go to Proxy -> Options to add a new Proxy Listener with the following:"
+	echo "        -Bind to port: 8080"
+	echo "        -Bind to address: Loopback Only"
+	echo "        -Support invisible proxying: Enabled"
+	echo "        -Generate a CA-signed certificate with a specific hostname: <mobile web service or API's host>"
+	echo "    * To use Drozer for ICC (inter-component communication) testing:"
+	echo "        -In the emulator, launch the Drozer app"
+	echo "        -Select the 'Embedded Server' option"
+	echo "        -Tap 'Enable' to start the server"
+    echo "        -In the Drozer terminal, run 'drozer console connect'"
+    echo "        -For help on how to use it for testing:"
+    echo "            https://labs.mwrinfosecurity.com/system/assets/502/original/mwri_drozer-users-guide_2013-07-25.pdf"
+}
+
+# Shutdown
+stop_test()
+{
+	echo "[-] Stopping Emulator..."
+	${android_sdk}/platform-tools/adb emu kill &> /dev/null
+	sleep 5
+	delete_avd
+	exit
+}
+
+# Main
+if [ $# -ne 0 ] || [[ -f $app_name ]]; then
+	create_avd
+	start_test
+	while true; do read x; done;
+	stop_test
+else
+    echo "Usage: `basename $0` [apkfile]"
+    exit 0
+fi;
